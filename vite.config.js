@@ -7,50 +7,44 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'autoUpdate',
-      includeAssets: ['vite.svg'],
+      registerType: "autoUpdate",
+      includeAssets: ["vite.svg"],
       manifest: {
-        name: 'Invoice Manager',
-        short_name: 'Invoices',
-        description: 'Manage invoices and products offline-first',
-        theme_color: '#3b82f6',
-        background_color: '#ffffff',
-        display: 'standalone',
-        start_url: '/',
-        scope: '/',
+        name: "Invoice Manager",
+        short_name: "Invoices",
+        description: "Manage invoices and products offline-first",
+        theme_color: "#3b82f6",
+        background_color: "#ffffff",
+        display: "standalone",
+        start_url: "/",
+        scope: "/",
         icons: [
-          { 
-            src: 'vite.svg', 
-            sizes: '192x192', 
-            type: 'image/svg+xml', 
-            purpose: 'any maskable' 
-          },
-          { 
-            src: 'vite.svg', 
-            sizes: '512x512', 
-            type: 'image/svg+xml', 
-            purpose: 'any maskable' 
+          {
+            src: "logo.png",
+            sizes: "512x512",
+            type: "image/svg+xml",
+            purpose: "any maskable",
           },
         ],
-        categories: ['business', 'productivity'],
-        lang: 'en',
-        orientation: 'portrait',
+        categories: ["business", "productivity"],
+        lang: "en",
+        orientation: "portrait",
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,png,ico}'],
+        globPatterns: ["**/*.{js,css,html,svg,png,ico}"],
         runtimeCaching: [
           {
             urlPattern: ({ url }) => url.origin === self.location.origin,
-            handler: 'StaleWhileRevalidate',
+            handler: "StaleWhileRevalidate",
             options: {
-              cacheName: 'static-resources',
+              cacheName: "static-resources",
             },
           },
           {
             urlPattern: ({ url }) => /supabase\.co\/.+/.test(url.href),
-            handler: 'NetworkFirst',
+            handler: "NetworkFirst",
             options: {
-              cacheName: 'api-cache',
+              cacheName: "api-cache",
               networkTimeoutSeconds: 3,
             },
           },
@@ -58,4 +52,4 @@ export default defineConfig({
       },
     }),
   ],
-})
+});
