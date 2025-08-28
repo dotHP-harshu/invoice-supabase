@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <!-- Back sheet -->
+  <rect x="14" y="10" width="36" height="44" rx="4" ry="4" fill="#3b82f6" opacity="0.8"/>
+  <!-- Middle sheet -->
+  <rect x="10" y="14" width="36" height="44" rx="4" ry="4" fill="#10b981" opacity="0.9"/>
+  <!-- Front sheet -->
+  <rect x="18" y="18" width="36" height="44" rx="4" ry="4" fill="#f59e0b"/>
+  <!-- Invoice lines -->
+  <line x1="24" y1="30" x2="48" y2="30" stroke="white" stroke-width="3" stroke-linecap="round"/>
+  <line x1="24" y1="38" x2="48" y2="38" stroke="white" stroke-width="3" stroke-linecap="round"/>
+  <!-- Currency symbol -->
+  <text x="36" y="54" text-anchor="middle" font-size="14" font-family="sans-serif" fill="white">₹</text>
+</svg>

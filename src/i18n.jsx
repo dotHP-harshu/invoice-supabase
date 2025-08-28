@@ -1,4 +1,5 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { I18nContext } from './contexts/I18nContext.js'
 
 const translations = {
   en: {
@@ -51,12 +52,17 @@ const translations = {
     nav_products: 'उत्पाद',
     nav_invoices: 'इनवॉइस',
     nav_create: 'इनवॉइस बनाएँ',
+    footer_copy: year => `© ${year} इनवॉइस मैनेजर। सर्वाधिकार सुरक्षित।`,
 
     add_product: 'उत्पाद जोड़ें',
     name: 'नाम',
     price: 'कीमत',
     stock: 'स्टॉक',
+    remaining: 'शेष',
     add: 'जोड़ें',
+    save: 'सहेजें',
+    cancel: 'रद्द करें',
+    edit: 'संपादित करें',
 
     search_placeholder: 'ग्राहक या आईडी से खोजें',
     new_invoice: 'नई इनवॉइस',
@@ -92,7 +98,7 @@ const translations = {
   }
 }
 
-const I18nContext = createContext({ lang: 'en', setLang: () => {}, t: () => '' })
+
 
 export function I18nProvider({ children }) {
   const [lang, setLang] = useState(() => localStorage.getItem('lang') || 'en')
@@ -114,6 +120,4 @@ export function I18nProvider({ children }) {
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>
 }
 
-export function useI18n() {
-  return useContext(I18nContext)
-}
+

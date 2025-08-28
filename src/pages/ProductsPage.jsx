@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { toast } from 'react-toastify'
 import { listProducts, createProduct, updateProduct, deleteProduct, subscribeProducts } from '../services/productsService.js'
-import { useI18n } from '../i18n.jsx'
+import { useI18n } from '../hooks/useI18n.js'
 
 export default function ProductsPage() {
   const { t } = useI18n()
@@ -123,6 +123,7 @@ export default function ProductsPage() {
                 <th className="th">{t("name")}</th>
                 <th className="th">{t("price")}</th>
                 <th className="th">{t("stock")}</th>
+                <th className="th">{t("remaining")}</th>
                 <th className="th w-48">{t("actions")}</th>
               </tr>
             </thead>
@@ -165,8 +166,37 @@ export default function ProductsPage() {
                         }
                       />
                     ) : (
-                      p.stock
+                      <div>
+                        {p.stock}
+                        {p._offline && <span className="offline-indicator">Offline</span>}
+                      </div>
                     )}
+                  </td>
+                  <td className="td" style={{ color: Number(p.remaining ?? p.stock) < 0 ? 'var(--danger)' : undefined }}>
+                    <div>
+                      {Number(p.remaining ?? p.stock)}
+                      {p._offline && <span className="offline-indicator">Offline</span>}
+                      {Number(p.remaining ?? p.stock) < 0 && (
+                        <span style={{ 
+                          color: 'var(--danger)', 
+                          marginLeft: '0.5rem',
+                          fontSize: '0.75rem',
+                          fontWeight: 'bold'
+                        }}>
+                          ⚠️ Negative Stock
+                        </span>
+                      )}
+                      {Number(p.remaining ?? p.stock) === 0 && (
+                        <span style={{ 
+                          color: 'var(--warning)', 
+                          marginLeft: '0.5rem',
+                          fontSize: '0.75rem',
+                          fontWeight: 'bold'
+                        }}>
+                          ⚠️ Out of Stock
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="td">
                     <div className="actions">

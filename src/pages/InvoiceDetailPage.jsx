@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import { toast } from 'react-toastify'
-import { getInvoiceWithItems, exportInvoiceToCSV, exportInvoiceToPDF, updateInvoice } from '../services/invoicesService.js'
-import { useI18n } from '../i18n.jsx'
+import { getInvoiceWithItems, exportInvoiceToPDF, updateInvoice } from '../services/invoicesService.js'
+import { useI18n } from '../hooks/useI18n.js'
 
 export default function InvoiceDetailPage() {
   const { t } = useI18n()
@@ -12,6 +12,13 @@ export default function InvoiceDetailPage() {
   const [form, setForm] = useState({ customer_name: '', items: [] })
   const [showInstallPrompt, setShowInstallPrompt] = useState(false)
   const [deferredPrompt, setDeferredPrompt] = useState(null)
+  
+  const load = useCallback(async () => {
+    const { data, error } = await getInvoiceWithItems(Number(id))
+    if (error) return toast.error(error.message)
+    setInvoice(data)
+    setForm({ customer_name: data.customer_name, items: data.items.map(it => ({ id: it.id, product_id: it.product_id, quantity: it.quantity, product_name: it.product_name, price: it.price })) })
+  }, [id])
   
   useEffect(() => {
     load()
@@ -26,14 +33,7 @@ export default function InvoiceDetailPage() {
       setShowInstallPrompt(false)
       setDeferredPrompt(null)
     })
-  }, [id])
-
-  async function load() {
-    const { data, error } = await getInvoiceWithItems(Number(id))
-    if (error) return toast.error(error.message)
-    setInvoice(data)
-    setForm({ customer_name: data.customer_name, items: data.items.map(it => ({ id: it.id, product_id: it.product_id, quantity: it.quantity, product_name: it.product_name, price: it.price })) })
-  }
+  }, [id, load])
 
   async function installPWA() {
     if (deferredPrompt) {
@@ -60,9 +60,9 @@ export default function InvoiceDetailPage() {
               📱 Install App
             </button>
           )}
-          <button className="button" onClick={() => exportInvoiceToCSV(invoice)}>{t('export_csv')}</button>
-          <button className="button" onClick={() => exportInvoiceToPDF(invoice)}>{t('export_pdf')}</button>
-          <button className="button" onClick={() => import('../services/invoicesService.js').then(m => m.exportInvoiceToInteractivePDF(invoice))}>Interactive PDF</button>
+          <button className="button button--primary" onClick={() => exportInvoiceToPDF(invoice)}>
+            📄 Export PDF
+          </button>
         </div>
       </div>
       <div className="card card--pad">

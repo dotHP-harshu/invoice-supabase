@@ -8,7 +8,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
-      includeAssets: ["vite.svg"],
+      includeAssets: ["logo.svg"],
       manifest: {
         name: "Invoice Manager",
         short_name: "Invoices",
@@ -20,7 +20,7 @@ export default defineConfig({
         scope: "/",
         icons: [
           {
-            src: "logo.png",
+            src: "logo.svg",
             sizes: "512x512",
             type: "image/svg+xml",
             purpose: "any maskable",
