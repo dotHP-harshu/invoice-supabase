@@ -107,7 +107,7 @@ export async function createInvoice(customerName, items) {
     
     await addInvoiceToCache(offlineInvoice)
     
-    // Add items to cache
+    // Add items to cache with all necessary fields for sync
     for (const item of items) {
       const offlineItem = {
         id: Date.now() + Math.random(),
@@ -115,12 +115,23 @@ export async function createInvoice(customerName, items) {
         product_id: item.product_id,
         quantity: item.quantity,
         _offline: true
+        // Note: price field removed as it doesn't exist in the database schema
       }
       await addInvoiceItemToCache(offlineItem)
     }
     
-    // Queue for sync when online
-    await enqueueSync({ kind: 'invoice:create', payload: { customerName, items } })
+    // Queue for sync when online - include all necessary data
+    const syncPayload = {
+      customerName,
+      items: items.map(item => ({
+        product_id: item.product_id,
+        quantity: item.quantity
+        // Note: price field removed as it doesn't exist in the database schema
+      }))
+    }
+    
+    await enqueueSync({ kind: 'invoice:create', payload: syncPayload })
+    console.log('Offline invoice queued for sync:', syncPayload)
     return { data: { id: tempId } }
   }
   

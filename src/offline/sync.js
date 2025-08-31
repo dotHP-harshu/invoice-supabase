@@ -79,24 +79,36 @@ class SyncManager {
       const queue = await getSyncQueue()
       let successCount = 0
       let errorCount = 0
+      let errorDetails = []
       
       for (const item of queue) {
         try {
+          console.log(`Processing sync item:`, item)
           const success = await this.processSyncItem(item)
           if (success) {
             await removeFromSyncQueue(item.id)
             successCount++
+            console.log(`Successfully synced item:`, item.kind)
           } else {
             errorCount++
+            errorDetails.push(`${item.kind}: Failed to process`)
+            console.error(`Failed to sync item:`, item)
           }
         } catch (error) {
-          console.error('Sync item error:', error)
+          console.error('Sync item error:', error, 'Item:', item)
           errorCount++
+          errorDetails.push(`${item.kind}: ${error.message}`)
           
           // Increment retry count
-          await updateSyncQueueItem(item.id, { 
-            retryCount: (item.retryCount || 0) + 1 
-          })
+          const retryCount = (item.retryCount || 0) + 1
+          await updateSyncQueueItem(item.id, { retryCount })
+          
+          // If item has been retried too many times, remove it from queue
+          if (retryCount >= 3) {
+            console.warn(`Removing sync item after ${retryCount} failed attempts:`, item)
+            await removeFromSyncQueue(item.id)
+            toast.error(`Failed to sync ${item.kind} after ${retryCount} attempts. Check data manually.`)
+          }
         }
       }
       
@@ -105,12 +117,14 @@ class SyncManager {
       }
       
       if (errorCount > 0) {
-        toast.error(`❌ Failed to sync ${errorCount} changes`)
+        const errorMessage = `❌ Failed to sync ${errorCount} changes. Check console for details.`
+        toast.error(errorMessage)
+        console.error('Sync errors details:', errorDetails)
       }
       
     } catch (error) {
       console.error('Sync error:', error)
-      toast.error('Sync failed. Please try again.')
+      toast.error(`Sync failed: ${error.message}`)
     } finally {
       this.syncInProgress = false
     }
@@ -143,91 +157,125 @@ class SyncManager {
         }
 
         case 'invoice:create': {
-          // Validate stock before creating invoice
-          const { valid, errors, error: validationError } = await validateStockForInvoice(item.payload.items)
-          if (validationError) return false
-          if (!valid) {
-            console.error('Stock validation failed:', errors)
-            return false
-          }
-          
-          // Create invoice first
-          const { data: invoice, error: invError } = await supabase
-            .from('invoices')
-            .insert({ customer_name: item.payload.customerName })
-            .select('id')
-            .single()
-          
-          if (invError) return false
-          
-          // Create invoice items
-          const itemsRows = item.payload.items.map(i => ({
-            invoice_id: invoice.id,
-            product_id: i.product_id,
-            quantity: i.quantity
-          }))
-          
-          const { error: itemsError } = await supabase
-            .from('invoice_items')
-            .insert(itemsRows)
-          
-          if (itemsError) return false
-          
-          // Update stock tracking
-          await updateStockForInvoice([], item.payload.items)
-          
-          return true
-        }
-
-        case 'invoice:update': {
-          if (item.payload.updates.customer_name !== undefined) {
-            const { error } = await supabase
-              .from('invoices')
-              .update({ customer_name: item.payload.updates.customer_name })
-              .eq('id', item.payload.invoiceId)
-            if (error) return false
-          }
-          
-          if (Array.isArray(item.payload.updates.items)) {
-            // Get current items to calculate stock changes
-            const { data: currentItems } = await supabase
-              .from('invoice_items')
-              .select('product_id, quantity')
-              .eq('invoice_id', item.payload.invoiceId)
-            
-            // Validate new stock levels
-            const { valid, errors, error: validationError } = await validateStockForInvoice(item.payload.updates.items)
-            if (validationError) return false
+          try {
+            // Validate stock before creating invoice
+            const { valid, errors, error: validationError } = await validateStockForInvoice(item.payload.items)
+            if (validationError) {
+              console.error('Stock validation error during sync:', validationError)
+              return false
+            }
             if (!valid) {
-              console.error('Stock validation failed:', errors)
+              console.error('Stock validation failed during sync:', errors)
               return false
             }
             
-            // Delete existing items
-            const { error: delError } = await supabase
-              .from('invoice_items')
-              .delete()
-              .eq('invoice_id', item.payload.invoiceId)
-            if (delError) return false
+            // Create invoice first
+            const { data: invoice, error: invError } = await supabase
+              .from('invoices')
+              .insert({ customer_name: item.payload.customerName })
+              .select('id')
+              .single()
             
-            // Insert new items
-            const rows = item.payload.updates.items.map(i => ({
-              invoice_id: item.payload.invoiceId,
+            if (invError) {
+              console.error('Invoice creation error during sync:', invError)
+              return false
+            }
+            
+            // Create invoice items - ensure all required fields are present
+            const itemsRows = item.payload.items.map(i => ({
+              invoice_id: invoice.id,
               product_id: i.product_id,
-              quantity: i.quantity,
-              price: i.price
+              quantity: i.quantity
+              // Note: price field removed as it doesn't exist in the database schema
             }))
             
-            const { error: insError } = await supabase
+            const { error: itemsError } = await supabase
               .from('invoice_items')
-              .insert(rows)
-            if (insError) return false
+              .insert(itemsRows)
+            
+            if (itemsError) {
+              console.error('Invoice items creation error during sync:', itemsError)
+              return false
+            }
             
             // Update stock tracking
-            await updateStockForInvoice(currentItems || [], item.payload.updates.items)
+            await updateStockForInvoice([], item.payload.items)
+            
+            console.log('Invoice sync completed successfully:', invoice.id)
+            return true
+          } catch (error) {
+            console.error('Unexpected error during invoice sync:', error)
+            return false
           }
-          
-          return true
+        }
+
+        case 'invoice:update': {
+          try {
+            if (item.payload.updates.customer_name !== undefined) {
+              const { error } = await supabase
+                .from('invoices')
+                .update({ customer_name: item.payload.updates.customer_name })
+                .eq('id', item.payload.invoiceId)
+              if (error) {
+                console.error('Customer name update error during sync:', error)
+                return false
+              }
+            }
+            
+            if (Array.isArray(item.payload.updates.items)) {
+              // Get current items to calculate stock changes
+              const { data: currentItems } = await supabase
+                .from('invoice_items')
+                .select('product_id, quantity')
+                .eq('invoice_id', item.payload.invoiceId)
+              
+              // Validate new stock levels
+              const { valid, errors, error: validationError } = await validateStockForInvoice(item.payload.updates.items)
+              if (validationError) {
+                console.error('Stock validation error during sync:', validationError)
+                return false
+              }
+              if (!valid) {
+                console.error('Stock validation failed during sync:', errors)
+                return false
+              }
+              
+              // Delete existing items
+              const { error: delError } = await supabase
+                .from('invoice_items')
+                .delete()
+                .eq('invoice_id', item.payload.invoiceId)
+              if (delError) {
+                console.error('Delete existing items error during sync:', delError)
+                return false
+              }
+              
+              // Insert new items - ensure all required fields are present
+              const rows = item.payload.updates.items.map(i => ({
+                invoice_id: item.payload.invoiceId,
+                product_id: i.product_id,
+                quantity: i.quantity
+                // Note: price field removed as it doesn't exist in the database schema
+              }))
+              
+              const { error: insError } = await supabase
+                .from('invoice_items')
+                .insert(rows)
+              if (insError) {
+                console.error('Insert new items error during sync:', insError)
+                return false
+              }
+              
+              // Update stock tracking
+              await updateStockForInvoice(currentItems || [], item.payload.updates.items)
+            }
+            
+            console.log('Invoice update sync completed successfully:', item.payload.invoiceId)
+            return true
+          } catch (error) {
+            console.error('Unexpected error during invoice update sync:', error)
+            return false
+          }
         }
 
         case 'invoice:delete': {
@@ -279,6 +327,116 @@ class SyncManager {
     await this.syncPendingChanges()
   }
 
+  async clearFailedSyncItems() {
+    try {
+      const queue = await getSyncQueue()
+      const failedItems = queue.filter(item => (item.retryCount || 0) >= 3)
+      
+      if (failedItems.length === 0) {
+        toast.info('No failed sync items to clear')
+        return
+      }
+      
+      for (const item of failedItems) {
+        await removeFromSyncQueue(item.id)
+      }
+      
+      toast.success(`Cleared ${failedItems.length} failed sync items`)
+      console.log('Cleared failed sync items:', failedItems)
+    } catch (error) {
+      console.error('Error clearing failed sync items:', error)
+      toast.error('Failed to clear failed sync items')
+    }
+  }
+
+  async getSyncQueueStatus() {
+    try {
+      const queue = await getSyncQueue()
+      const status = {
+        total: queue.length,
+        pending: queue.filter(item => (item.retryCount || 0) === 0).length,
+        retrying: queue.filter(item => (item.retryCount || 0) > 0 && (item.retryCount || 0) < 3).length,
+        failed: queue.filter(item => (item.retryCount || 0) >= 3).length
+      }
+      return status
+    } catch (error) {
+      console.error('Error getting sync queue status:', error)
+      return { total: 0, pending: 0, retrying: 0, failed: 0 }
+    }
+  }
+
+  async debugSyncQueue() {
+    try {
+      const queue = await getSyncQueue()
+      console.log('=== SYNC QUEUE DEBUG ===')
+      console.log('Total items:', queue.length)
+      
+      if (queue.length === 0) {
+        console.log('No items in sync queue')
+        return
+      }
+      
+      queue.forEach((item, index) => {
+        console.log(`Item ${index + 1}:`, {
+          id: item.id,
+          kind: item.kind,
+          payload: item.payload,
+          retryCount: item.retryCount || 0,
+          timestamp: new Date(item.timestamp).toLocaleString()
+        })
+        
+        // Additional debugging for invoice operations
+        if (item.kind === 'invoice:create' || item.kind === 'invoice:update') {
+          console.log(`  - Items data:`, item.payload.items)
+          console.log(`  - Items structure check:`, item.payload.items?.map(i => ({
+            has_product_id: !!i.product_id,
+            has_quantity: !!i.quantity,
+            has_price: !!i.price,
+            product_id: i.product_id,
+            quantity: i.quantity
+          })))
+        }
+      })
+      
+      return queue
+    } catch (error) {
+      console.error('Error debugging sync queue:', error)
+      return []
+    }
+  }
+
+  async retrySpecificItem(itemId) {
+    try {
+      const queue = await getSyncQueue()
+      const item = queue.find(q => q.id === itemId)
+      
+      if (!item) {
+        console.error('Item not found in sync queue:', itemId)
+        return false
+      }
+      
+      console.log('Retrying specific item:', item)
+      
+      // Reset retry count
+      await updateSyncQueueItem(itemId, { retryCount: 0 })
+      
+      // Try to process the item
+      const success = await this.processSyncItem(item)
+      
+      if (success) {
+        await removeFromSyncQueue(itemId)
+        console.log('Item retry successful:', itemId)
+        return true
+      } else {
+        console.log('Item retry failed:', itemId)
+        return false
+      }
+    } catch (error) {
+      console.error('Error retrying specific item:', error)
+      return false
+    }
+  }
+
   getStatus() {
     return {
       isOnline: this.isOnline,
@@ -300,5 +458,9 @@ export const startAutoSync = () => syncManager.startAutoSync()
 export const stopAutoSync = () => syncManager.stopAutoSync()
 export const manualSync = () => syncManager.manualSync()
 export const getSyncStatus = () => syncManager.getStatus()
+export const clearFailedSyncItems = () => syncManager.clearFailedSyncItems()
+export const getSyncQueueStatus = () => syncManager.getSyncQueueStatus()
+export const debugSyncQueue = () => syncManager.debugSyncQueue()
+export const retrySpecificItem = (itemId) => syncManager.retrySpecificItem(itemId)
 
 

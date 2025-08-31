@@ -4,6 +4,7 @@ import InvoicesPage from './pages/InvoicesPage.jsx'
 import InvoiceDetailPage from './pages/InvoiceDetailPage.jsx'
 import CreateInvoicePage from './pages/CreateInvoicePage.jsx'
 import ConnectionStatus from "./components/ConnectionStatus.jsx";
+import SyncDebugger from "./components/SyncDebugger.jsx";
 import { ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 import { I18nProvider } from "./i18n.jsx";
@@ -119,6 +120,7 @@ function AppShell() {
             </NavLink>
           </nav>
           <div className="cluster">
+            <SyncDebugger />
             {(showInstallPrompt || canInstall) && (
               <button
                 className="button button--primary"
