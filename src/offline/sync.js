@@ -211,63 +211,104 @@ class SyncManager {
 
         case 'invoice:update': {
           try {
+            console.log('Processing invoice:update sync item:', item.payload)
+            let hasErrors = false
+            let errorMessages = []
+            
             if (item.payload.updates.customer_name !== undefined) {
+              console.log('Syncing customer name update:', item.payload.updates.customer_name)
               const { error } = await supabase
                 .from('invoices')
                 .update({ customer_name: item.payload.updates.customer_name })
                 .eq('id', item.payload.invoiceId)
               if (error) {
                 console.error('Customer name update error during sync:', error)
-                return false
+                hasErrors = true
+                errorMessages.push(`Customer name update failed: ${error.message}`)
+              } else {
+                console.log('Customer name updated successfully during sync')
               }
             }
             
             if (Array.isArray(item.payload.updates.items)) {
+              console.log('Syncing invoice items update:', item.payload.updates.items)
+              
               // Get current items to calculate stock changes
-              const { data: currentItems } = await supabase
+              const { data: currentItems, error: fetchError } = await supabase
                 .from('invoice_items')
                 .select('product_id, quantity')
                 .eq('invoice_id', item.payload.invoiceId)
+              
+              if (fetchError) {
+                console.error('Error fetching current items during sync:', fetchError)
+                hasErrors = true
+                errorMessages.push(`Failed to fetch current items: ${fetchError.message}`)
+              } else {
+                console.log('Current items fetched for sync:', currentItems)
+              }
               
               // Validate new stock levels
               const { valid, errors, error: validationError } = await validateStockForInvoice(item.payload.updates.items)
               if (validationError) {
                 console.error('Stock validation error during sync:', validationError)
-                return false
-              }
-              if (!valid) {
+                hasErrors = true
+                errorMessages.push(`Stock validation error: ${validationError.message}`)
+              } else if (!valid) {
                 console.error('Stock validation failed during sync:', errors)
-                return false
+                hasErrors = true
+                errorMessages.push(`Stock validation failed: ${errors.join('. ')}`)
+              } else {
+                console.log('Stock validation passed during sync')
+                
+                // Delete existing items
+                console.log('Deleting existing items during sync...')
+                const { error: delError } = await supabase
+                  .from('invoice_items')
+                  .delete()
+                  .eq('invoice_id', item.payload.invoiceId)
+                if (delError) {
+                  console.error('Delete existing items error during sync:', delError)
+                  hasErrors = true
+                  errorMessages.push(`Failed to delete existing items: ${delError.message}`)
+                } else {
+                  console.log('Existing items deleted successfully during sync')
+                  
+                  // Insert new items - ensure all required fields are present
+                  const rows = item.payload.updates.items.map(i => ({
+                    invoice_id: item.payload.invoiceId,
+                    product_id: i.product_id,
+                    quantity: i.quantity
+                    // Note: price field removed as it doesn't exist in the database schema
+                  }))
+                  
+                  console.log('Inserting new items during sync:', rows)
+                  const { error: insError } = await supabase
+                    .from('invoice_items')
+                    .insert(rows)
+                  if (insError) {
+                    console.error('Insert new items error during sync:', insError)
+                    hasErrors = true
+                    errorMessages.push(`Failed to insert new items: ${insError.message}`)
+                  } else {
+                    console.log('New items inserted successfully during sync')
+                    
+                    // Update stock tracking
+                    console.log('Updating stock tracking during sync...')
+                    try {
+                      await updateStockForInvoice(currentItems || [], item.payload.updates.items)
+                      console.log('Stock tracking updated successfully during sync')
+                    } catch (stockError) {
+                      console.error('Stock tracking update error during sync:', stockError)
+                      // Don't fail the entire operation for stock tracking errors
+                    }
+                  }
+                }
               }
-              
-              // Delete existing items
-              const { error: delError } = await supabase
-                .from('invoice_items')
-                .delete()
-                .eq('invoice_id', item.payload.invoiceId)
-              if (delError) {
-                console.error('Delete existing items error during sync:', delError)
-                return false
-              }
-              
-              // Insert new items - ensure all required fields are present
-              const rows = item.payload.updates.items.map(i => ({
-                invoice_id: item.payload.invoiceId,
-                product_id: i.product_id,
-                quantity: i.quantity
-                // Note: price field removed as it doesn't exist in the database schema
-              }))
-              
-              const { error: insError } = await supabase
-                .from('invoice_items')
-                .insert(rows)
-              if (insError) {
-                console.error('Insert new items error during sync:', insError)
-                return false
-              }
-              
-              // Update stock tracking
-              await updateStockForInvoice(currentItems || [], item.payload.updates.items)
+            }
+            
+            if (hasErrors) {
+              console.error('Invoice update sync completed with errors:', errorMessages)
+              return false
             }
             
             console.log('Invoice update sync completed successfully:', item.payload.invoiceId)
@@ -326,6 +367,7 @@ class SyncManager {
     toast.info('🔄 Manual sync started...')
     await this.syncPendingChanges()
   }
+
 
   async clearFailedSyncItems() {
     try {

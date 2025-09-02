@@ -215,7 +215,10 @@ export async function createInvoice(customerName, items) {
 }
 
 export async function updateInvoice(invoiceId, updates) {
+  console.log('updateInvoice called with:', { invoiceId, updates, isOnline: navigator.onLine })
+  
   if (!navigator.onLine) {
+    console.log('Offline mode - updating cache and queuing for sync')
     // Update local cache immediately
     await updateInvoiceInCache(invoiceId, updates)
     
@@ -225,53 +228,130 @@ export async function updateInvoice(invoiceId, updates) {
   }
   
   try {
+    console.log('Online mode - updating database directly')
+    let hasErrors = false
+    let errorMessages = []
+    
     if (updates.customer_name !== undefined) {
+      console.log('Updating customer name:', updates.customer_name)
       const { error } = await supabase.from('invoices').update({ customer_name: updates.customer_name }).eq('id', invoiceId)
-      if (error) return { error }
-      await updateInvoiceInCache(invoiceId, { customer_name: updates.customer_name })
+      if (error) {
+        console.error('Customer name update error:', error)
+        hasErrors = true
+        errorMessages.push(`Customer name update failed: ${error.message}`)
+      } else {
+        console.log('Customer name updated successfully')
+        await updateInvoiceInCache(invoiceId, { customer_name: updates.customer_name })
+      }
     }
     
     if (Array.isArray(updates.items)) {
+      console.log('Updating invoice items:', updates.items)
+      
       // Get current items to calculate stock changes
-      const { data: currentItems } = await supabase
+      const { data: currentItems, error: fetchError } = await supabase
         .from('invoice_items')
         .select('product_id, quantity')
         .eq('invoice_id', invoiceId)
       
-      // Validate new stock levels (now returns warnings)
-      const { valid, errors, warnings, error: validationError } = await validateStockForInvoice(updates.items)
-      if (validationError) return { error: validationError }
-      if (!valid) {
-        return { error: { message: errors.join('. ') } }
+      if (fetchError) {
+        console.error('Error fetching current items:', fetchError)
+        hasErrors = true
+        errorMessages.push(`Failed to fetch current items: ${fetchError.message}`)
+      } else {
+        console.log('Current items fetched:', currentItems)
       }
       
-      // Delete existing items
-      const { error: delErr } = await supabase.from('invoice_items').delete().eq('invoice_id', invoiceId)
-      if (delErr) return { error: delErr }
-      
-      // Insert new items
-      const rows = updates.items.map(i => ({ 
-        invoice_id: invoiceId, 
-        product_id: i.product_id, 
-        quantity: i.quantity
-      }))
-      
-      const { error: insErr } = await supabase.from('invoice_items').insert(rows)
-      if (insErr) return { error: insErr }
-      
-      // Update stock tracking
-      await updateStockForInvoice(currentItems || [], updates.items)
-      
-      // Update local cache
-      await deleteInvoiceItemsFromCache(invoiceId)
-      for (const row of rows) {
-        await addInvoiceItemToCache(row)
+      // Validate new stock levels (now returns warnings)
+      const { valid, errors, warnings, error: validationError } = await validateStockForInvoice(updates.items)
+      if (validationError) {
+        console.error('Stock validation error:', validationError)
+        hasErrors = true
+        errorMessages.push(`Stock validation error: ${validationError.message}`)
+      } else if (!valid) {
+        console.error('Stock validation failed:', errors)
+        hasErrors = true
+        errorMessages.push(`Stock validation failed: ${errors.join('. ')}`)
+      } else {
+        console.log('Stock validation passed, warnings:', warnings)
+        
+        // Delete existing items
+        console.log('Deleting existing items...')
+        const { error: delErr } = await supabase.from('invoice_items').delete().eq('invoice_id', invoiceId)
+        if (delErr) {
+          console.error('Error deleting existing items:', delErr)
+          hasErrors = true
+          errorMessages.push(`Failed to delete existing items: ${delErr.message}`)
+        } else {
+          console.log('Existing items deleted successfully')
+          
+          // Insert new items
+          const rows = updates.items.map(i => ({ 
+            invoice_id: invoiceId, 
+            product_id: i.product_id, 
+            quantity: i.quantity
+          }))
+          
+          console.log('Inserting new items:', rows)
+          const { error: insErr } = await supabase.from('invoice_items').insert(rows)
+          if (insErr) {
+            console.error('Error inserting new items:', insErr)
+            hasErrors = true
+            errorMessages.push(`Failed to insert new items: ${insErr.message}`)
+          } else {
+            console.log('New items inserted successfully')
+            
+            // Update stock tracking
+            console.log('Updating stock tracking...')
+            try {
+              await updateStockForInvoice(currentItems || [], updates.items)
+              console.log('Stock tracking updated successfully')
+            } catch (stockError) {
+              console.error('Stock tracking update error:', stockError)
+              // Don't fail the entire operation for stock tracking errors
+            }
+            
+            // Update local cache
+            console.log('Updating local cache...')
+            try {
+              await deleteInvoiceItemsFromCache(invoiceId)
+              for (const row of rows) {
+                await addInvoiceItemToCache(row)
+              }
+              console.log('Local cache updated successfully')
+            } catch (cacheError) {
+              console.warn('Cache update failed, but database was updated:', cacheError)
+              // Don't fail the entire operation if cache fails
+            }
+          }
+        }
       }
     }
     
+    if (hasErrors) {
+      console.error('Invoice update completed with errors:', errorMessages)
+      
+      // If we have errors, try to queue the update for sync as a fallback
+      console.log('Attempting to queue update for sync as fallback...')
+      try {
+        await updateInvoiceInCache(invoiceId, updates)
+        await enqueueSync({ kind: 'invoice:update', payload: { invoiceId, updates } })
+        console.log('Update queued for sync as fallback')
+        return { 
+          error: { 
+            message: `Database update failed, but changes have been saved locally and will sync when connection improves. Errors: ${errorMessages.join('. ')}` 
+          } 
+        }
+      } catch (fallbackError) {
+        console.error('Fallback sync queue also failed:', fallbackError)
+        return { error: { message: errorMessages.join('. ') } }
+      }
+    }
+    
+    console.log('Invoice update completed successfully')
     return { data: true }
   } catch (error) {
-    console.error('Error updating invoice:', error)
+    console.error('Unexpected error updating invoice:', error)
     return { error: { message: `Failed to update invoice: ${error.message || error}` } }
   }
 }
