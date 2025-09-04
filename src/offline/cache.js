@@ -134,4 +134,17 @@ export async function deleteInvoiceItemsFromCache(invoiceId) {
   }
 }
 
+export async function putInvoiceItemToCache(item) {
+  try {
+    // Ensure the item has an id field for IndexedDB keyPath
+    if (!item.id) {
+      item.id = Date.now() + Math.random()
+    }
+    return await put('invoice_items', item)
+  } catch (error) {
+    console.error('Error updating invoice item in cache:', error, item)
+    throw error
+  }
+}
+
 

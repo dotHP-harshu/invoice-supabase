@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import { toast } from 'react-toastify'
-import { getInvoiceWithItems, exportInvoiceToPDF, updateInvoice } from '../services/invoicesService.js'
+import { getInvoiceWithItems, exportInvoiceToPDF, updateInvoice, updateInvoiceItemPrice } from '../services/invoicesService.js'
 import { useI18n } from '../hooks/useI18n.js'
 
 export default function InvoiceDetailPage() {
@@ -17,7 +17,7 @@ export default function InvoiceDetailPage() {
     const { data, error } = await getInvoiceWithItems(Number(id))
     if (error) return toast.error(error.message)
     setInvoice(data)
-    setForm({ customer_name: data.customer_name, items: data.items.map(it => ({ id: it.id, product_id: it.product_id, quantity: it.quantity, product_name: it.product_name, price: it.price })) })
+    setForm({ customer_name: data.customer_name, items: data.items.map(it => ({ id: it.id, product_id: it.product_id, quantity: it.quantity, product_name: it.product_name, price: it.price, original_price: it.original_price, has_custom_price: it.has_custom_price })) })
   }, [id])
   
   useEffect(() => {
@@ -96,19 +96,55 @@ export default function InvoiceDetailPage() {
                   <td className="td">{item.product_name}</td>
                   <td className="td">
                     {editing ? (
-                      <input 
-                        className="input" 
-                        style={{ maxWidth: '6rem' }} 
-                        value={String(item.price)} 
-                        onChange={e => {
-                          const v = e.target.value
-                          const items = [...form.items]
-                          items[idx] = { ...items[idx], price: Number(v) }
-                          setForm({ ...form, items })
-                        }} 
-                      />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <input 
+                          className="input" 
+                          style={{ maxWidth: '6rem' }} 
+                          value={String(item.price)} 
+                          onChange={e => {
+                            const v = e.target.value
+                            const items = [...form.items]
+                            const newPrice = Number(v)
+                            const isCustom = newPrice !== items[idx].original_price
+                            items[idx] = { ...items[idx], price: newPrice, has_custom_price: isCustom }
+                            setForm({ ...form, items })
+                          }} 
+                        />
+                        {item.has_custom_price && (
+                          <button 
+                            className="button button--small" 
+                            style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
+                            onClick={async () => {
+                              // Reset to original price
+                              const items = [...form.items]
+                              items[idx] = { ...items[idx], price: item.original_price, has_custom_price: false }
+                              setForm({ ...form, items })
+                              
+                              // Update in database
+                              const { error } = await updateInvoiceItemPrice(Number(id), item.id, null)
+                              if (error) {
+                                toast.error(error.message)
+                              } else {
+                                toast.success('Price reset to original')
+                              }
+                            }}
+                            title="Reset to original price"
+                          >
+                            🔄
+                          </button>
+                        )}
+                      </div>
                     ) : (
-                      `₹${Number(item.price).toFixed(2)}`
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span style={{ color: item.has_custom_price ? '#dc2626' : 'inherit' }}>
+                          ₹{Number(item.price).toFixed(2)}
+                        </span>
+                        {item.has_custom_price && (
+                          <span style={{ fontSize: '0.75rem', color: '#dc2626' }} title="Custom price">
+                            ⭐
+                          </span>
+                        )}
+                      </div>
                     )}
                   </td>
                   <td className="td">
@@ -134,7 +170,35 @@ export default function InvoiceDetailPage() {
           {editing ? (
             <>
               <button className="button button--primary" onClick={async () => {
-                const payload = { customer_name: form.customer_name, items: form.items.map(it => ({ product_id: it.product_id, quantity: it.quantity, price: it.price })) }
+                // First, update any custom prices that have changed
+                for (const item of form.items) {
+                  const shouldSetCustomPrice = item.price !== item.original_price
+                  const shouldRemoveCustomPrice = item.has_custom_price && item.price === item.original_price
+                  
+                  if (shouldSetCustomPrice) {
+                    const { error } = await updateInvoiceItemPrice(Number(id), item.id, item.price)
+                    if (error) {
+                      toast.error(`Failed to update price for ${item.product_name}: ${error.message}`)
+                      return
+                    }
+                  } else if (shouldRemoveCustomPrice) {
+                    const { error } = await updateInvoiceItemPrice(Number(id), item.id, null)
+                    if (error) {
+                      toast.error(`Failed to reset price for ${item.product_name}: ${error.message}`)
+                      return
+                    }
+                  }
+                }
+                
+                // Then update the invoice with other changes
+                const payload = { 
+                  customer_name: form.customer_name, 
+                  items: form.items.map(it => ({ 
+                    product_id: it.product_id, 
+                    quantity: it.quantity,
+                    custom_price: (it.price !== it.original_price) ? it.price : null
+                  })) 
+                }
                 const { error } = await updateInvoice(Number(id), payload)
                 if (error) return toast.error(error.message)
                 toast.success(t('invoice_updated'))

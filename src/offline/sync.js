@@ -74,7 +74,7 @@ class SyncManager {
       
       if (pendingCount === 0) return
       
-      console.log(`Syncing ${pendingCount} pending changes...`)
+      
       
       const queue = await getSyncQueue()
       let successCount = 0
@@ -83,19 +83,19 @@ class SyncManager {
       
       for (const item of queue) {
         try {
-          console.log(`Processing sync item:`, item)
+          
           const success = await this.processSyncItem(item)
           if (success) {
             await removeFromSyncQueue(item.id)
             successCount++
-            console.log(`Successfully synced item:`, item.kind)
+            
           } else {
             errorCount++
             errorDetails.push(`${item.kind}: Failed to process`)
-            console.error(`Failed to sync item:`, item)
+            
           }
         } catch (error) {
-          console.error('Sync item error:', error, 'Item:', item)
+          
           errorCount++
           errorDetails.push(`${item.kind}: ${error.message}`)
           
@@ -105,7 +105,7 @@ class SyncManager {
           
           // If item has been retried too many times, remove it from queue
           if (retryCount >= 3) {
-            console.warn(`Removing sync item after ${retryCount} failed attempts:`, item)
+            
             await removeFromSyncQueue(item.id)
             toast.error(`Failed to sync ${item.kind} after ${retryCount} attempts. Check data manually.`)
           }
@@ -117,13 +117,12 @@ class SyncManager {
       }
       
       if (errorCount > 0) {
-        const errorMessage = `❌ Failed to sync ${errorCount} changes. Check console for details.`
+        const errorMessage = `❌ Failed to sync ${errorCount} changes. See errors.`
         toast.error(errorMessage)
-        console.error('Sync errors details:', errorDetails)
       }
       
     } catch (error) {
-      console.error('Sync error:', error)
+      
       toast.error(`Sync failed: ${error.message}`)
     } finally {
       this.syncInProgress = false
@@ -161,11 +160,11 @@ class SyncManager {
             // Validate stock before creating invoice
             const { valid, errors, error: validationError } = await validateStockForInvoice(item.payload.items)
             if (validationError) {
-              console.error('Stock validation error during sync:', validationError)
+              
               return false
             }
             if (!valid) {
-              console.error('Stock validation failed during sync:', errors)
+              
               return false
             }
             
@@ -177,7 +176,7 @@ class SyncManager {
               .single()
             
             if (invError) {
-              console.error('Invoice creation error during sync:', invError)
+              
               return false
             }
             
@@ -185,8 +184,8 @@ class SyncManager {
             const itemsRows = item.payload.items.map(i => ({
               invoice_id: invoice.id,
               product_id: i.product_id,
-              quantity: i.quantity
-              // Note: price field removed as it doesn't exist in the database schema
+              quantity: i.quantity,
+              custom_price: i.custom_price ?? null
             }))
             
             const { error: itemsError } = await supabase
@@ -194,44 +193,44 @@ class SyncManager {
               .insert(itemsRows)
             
             if (itemsError) {
-              console.error('Invoice items creation error during sync:', itemsError)
+              
               return false
             }
             
             // Update stock tracking
             await updateStockForInvoice([], item.payload.items)
             
-            console.log('Invoice sync completed successfully:', invoice.id)
+            
             return true
           } catch (error) {
-            console.error('Unexpected error during invoice sync:', error)
+            
             return false
           }
         }
 
         case 'invoice:update': {
           try {
-            console.log('Processing invoice:update sync item:', item.payload)
+            
             let hasErrors = false
             let errorMessages = []
             
             if (item.payload.updates.customer_name !== undefined) {
-              console.log('Syncing customer name update:', item.payload.updates.customer_name)
+              
               const { error } = await supabase
                 .from('invoices')
                 .update({ customer_name: item.payload.updates.customer_name })
                 .eq('id', item.payload.invoiceId)
               if (error) {
-                console.error('Customer name update error during sync:', error)
+                
                 hasErrors = true
                 errorMessages.push(`Customer name update failed: ${error.message}`)
               } else {
-                console.log('Customer name updated successfully during sync')
+                
               }
             }
             
             if (Array.isArray(item.payload.updates.items)) {
-              console.log('Syncing invoice items update:', item.payload.updates.items)
+              
               
               // Get current items to calculate stock changes
               const { data: currentItems, error: fetchError } = await supabase
@@ -240,65 +239,65 @@ class SyncManager {
                 .eq('invoice_id', item.payload.invoiceId)
               
               if (fetchError) {
-                console.error('Error fetching current items during sync:', fetchError)
+                
                 hasErrors = true
                 errorMessages.push(`Failed to fetch current items: ${fetchError.message}`)
               } else {
-                console.log('Current items fetched for sync:', currentItems)
+                
               }
               
               // Validate new stock levels
               const { valid, errors, error: validationError } = await validateStockForInvoice(item.payload.updates.items)
               if (validationError) {
-                console.error('Stock validation error during sync:', validationError)
+                
                 hasErrors = true
                 errorMessages.push(`Stock validation error: ${validationError.message}`)
               } else if (!valid) {
-                console.error('Stock validation failed during sync:', errors)
+                
                 hasErrors = true
                 errorMessages.push(`Stock validation failed: ${errors.join('. ')}`)
               } else {
-                console.log('Stock validation passed during sync')
+                
                 
                 // Delete existing items
-                console.log('Deleting existing items during sync...')
+                
                 const { error: delError } = await supabase
                   .from('invoice_items')
                   .delete()
                   .eq('invoice_id', item.payload.invoiceId)
                 if (delError) {
-                  console.error('Delete existing items error during sync:', delError)
+                  
                   hasErrors = true
                   errorMessages.push(`Failed to delete existing items: ${delError.message}`)
                 } else {
-                  console.log('Existing items deleted successfully during sync')
+                  
                   
                   // Insert new items - ensure all required fields are present
                   const rows = item.payload.updates.items.map(i => ({
                     invoice_id: item.payload.invoiceId,
                     product_id: i.product_id,
-                    quantity: i.quantity
-                    // Note: price field removed as it doesn't exist in the database schema
+                    quantity: i.quantity,
+                    custom_price: i.custom_price ?? null
                   }))
                   
-                  console.log('Inserting new items during sync:', rows)
+                  
                   const { error: insError } = await supabase
                     .from('invoice_items')
                     .insert(rows)
                   if (insError) {
-                    console.error('Insert new items error during sync:', insError)
+                    
                     hasErrors = true
                     errorMessages.push(`Failed to insert new items: ${insError.message}`)
                   } else {
-                    console.log('New items inserted successfully during sync')
+                    
                     
                     // Update stock tracking
-                    console.log('Updating stock tracking during sync...')
+                    
                     try {
                       await updateStockForInvoice(currentItems || [], item.payload.updates.items)
-                      console.log('Stock tracking updated successfully during sync')
+                      
                     } catch (stockError) {
-                      console.error('Stock tracking update error during sync:', stockError)
+                      
                       // Don't fail the entire operation for stock tracking errors
                     }
                   }
@@ -307,14 +306,37 @@ class SyncManager {
             }
             
             if (hasErrors) {
-              console.error('Invoice update sync completed with errors:', errorMessages)
+              
               return false
             }
             
-            console.log('Invoice update sync completed successfully:', item.payload.invoiceId)
+            
+            // After successful sync, refresh local cache for invoices and invoice_items
+            try {
+              const { data: invoicesData } = await supabase
+                .from('invoices')
+                .select('*')
+                .order('id', { ascending: false })
+              if (invoicesData) {
+                // Lazy import to avoid circular deps
+                const cache = await import('./cache.js')
+                await cache.clearStore('invoices')
+                await cache.putAll('invoices', invoicesData)
+              }
+              const { data: itemsData } = await supabase
+                .from('invoice_items')
+                .select('*')
+              if (itemsData) {
+                const cache = await import('./cache.js')
+                await cache.clearStore('invoice_items')
+                await cache.putAll('invoice_items', itemsData)
+              }
+            } catch (refreshError) {
+              console.warn('Cache refresh after invoice:update sync failed:', refreshError)
+            }
             return true
           } catch (error) {
-            console.error('Unexpected error during invoice update sync:', error)
+            
             return false
           }
         }
@@ -348,12 +370,25 @@ class SyncManager {
           return true
         }
 
+        case 'invoice_item:update_price': {
+          try {
+            const { error } = await supabase
+              .from('invoice_items')
+              .update({ custom_price: item.payload.customPrice })
+              .eq('id', item.payload.itemId)
+              .eq('invoice_id', item.payload.invoiceId)
+            return !error
+          } catch (error) {
+            return false
+          }
+        }
+
         default:
-          console.warn('Unknown sync item kind:', item.kind)
+          
           return false
       }
     } catch (error) {
-      console.error('Process sync item error:', error)
+      
       return false
     }
   }
@@ -384,9 +419,9 @@ class SyncManager {
       }
       
       toast.success(`Cleared ${failedItems.length} failed sync items`)
-      console.log('Cleared failed sync items:', failedItems)
+      
     } catch (error) {
-      console.error('Error clearing failed sync items:', error)
+      
       toast.error('Failed to clear failed sync items')
     }
   }
@@ -402,7 +437,7 @@ class SyncManager {
       }
       return status
     } catch (error) {
-      console.error('Error getting sync queue status:', error)
+      
       return { total: 0, pending: 0, retrying: 0, failed: 0 }
     }
   }
@@ -410,39 +445,18 @@ class SyncManager {
   async debugSyncQueue() {
     try {
       const queue = await getSyncQueue()
-      console.log('=== SYNC QUEUE DEBUG ===')
-      console.log('Total items:', queue.length)
+      
       
       if (queue.length === 0) {
-        console.log('No items in sync queue')
+        
         return
       }
       
-      queue.forEach((item, index) => {
-        console.log(`Item ${index + 1}:`, {
-          id: item.id,
-          kind: item.kind,
-          payload: item.payload,
-          retryCount: item.retryCount || 0,
-          timestamp: new Date(item.timestamp).toLocaleString()
-        })
-        
-        // Additional debugging for invoice operations
-        if (item.kind === 'invoice:create' || item.kind === 'invoice:update') {
-          console.log(`  - Items data:`, item.payload.items)
-          console.log(`  - Items structure check:`, item.payload.items?.map(i => ({
-            has_product_id: !!i.product_id,
-            has_quantity: !!i.quantity,
-            has_price: !!i.price,
-            product_id: i.product_id,
-            quantity: i.quantity
-          })))
-        }
-      })
+      queue.forEach(() => {})
       
       return queue
     } catch (error) {
-      console.error('Error debugging sync queue:', error)
+      
       return []
     }
   }
@@ -453,11 +467,11 @@ class SyncManager {
       const item = queue.find(q => q.id === itemId)
       
       if (!item) {
-        console.error('Item not found in sync queue:', itemId)
+        
         return false
       }
       
-      console.log('Retrying specific item:', item)
+      
       
       // Reset retry count
       await updateSyncQueueItem(itemId, { retryCount: 0 })
@@ -467,14 +481,14 @@ class SyncManager {
       
       if (success) {
         await removeFromSyncQueue(itemId)
-        console.log('Item retry successful:', itemId)
+        
         return true
       } else {
-        console.log('Item retry failed:', itemId)
+        
         return false
       }
     } catch (error) {
-      console.error('Error retrying specific item:', error)
+      
       return false
     }
   }

@@ -49,14 +49,12 @@ function AppShell() {
 
     // Listen for PWA install prompt
     const handleBeforeInstallPrompt = (e) => {
-      console.log("PWA install prompt detected");
       e.preventDefault();
       setDeferredPrompt(e);
       setShowInstallPrompt(true);
     };
 
     const handleAppInstalled = () => {
-      console.log("PWA installed successfully");
       setShowInstallPrompt(false);
       setDeferredPrompt(null);
       setCanInstall(false);

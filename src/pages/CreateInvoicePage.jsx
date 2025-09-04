@@ -9,6 +9,7 @@ export default function CreateInvoicePage() {
   const [customerName, setCustomerName] = useState("");
   const [products, setProducts] = useState([]);
   const [quantities, setQuantities] = useState({});
+  const [customPrices, setCustomPrices] = useState({}); // New state for custom prices
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -30,14 +31,23 @@ export default function CreateInvoicePage() {
   const items = useMemo(() => {
     try {
       const mappedItems = products
-        .map((p) => ({
-          product_id: p.id,
-          name: p.name,
-          price: Number(p.price),
-          quantity: Number(quantities[p.id] || 0),
-          stock: Number(p.stock),
-          remaining: Number(p.remaining ?? p.stock),
-        }))
+        .map((p) => {
+          const defaultPrice = Number(p.price);
+          const customPrice = customPrices[p.id];
+          const finalPrice = customPrice !== undefined ? Number(customPrice) : defaultPrice;
+          
+          return {
+            product_id: p.id,
+            name: p.name,
+            price: finalPrice,
+            original_price: defaultPrice,
+            custom_price: customPrice !== undefined ? Number(customPrice) : null,
+            quantity: Number(quantities[p.id] || 0),
+            stock: Number(p.stock),
+            remaining: Number(p.remaining ?? p.stock),
+            has_custom_price: customPrice !== undefined,
+          };
+        })
         .filter((it) => it.quantity > 0);
 
       return mappedItems;
@@ -45,7 +55,7 @@ export default function CreateInvoicePage() {
       console.error("Error calculating items:", error);
       return [];
     }
-  }, [products, quantities]);
+  }, [products, quantities, customPrices]);
 
   // Calculate real-time remaining stock
   const productsWithRealTimeStock = useMemo(() => {
@@ -103,7 +113,11 @@ export default function CreateInvoicePage() {
 
       const result = await createInvoice(
         customerName.trim(),
-        items.map((i) => ({ product_id: i.product_id, quantity: i.quantity }))
+        items.map((i) => ({ 
+          product_id: i.product_id, 
+          quantity: i.quantity,
+          custom_price: i.custom_price // Pass custom price to service
+        }))
       );
 
       setSaving(false);
@@ -122,6 +136,7 @@ export default function CreateInvoicePage() {
 
       setCustomerName("");
       setQuantities({});
+      setCustomPrices({}); // Reset custom prices
       toast.success("Invoice created successfully!");
     } catch (error) {
       console.error("Error creating invoice:", error);
@@ -191,7 +206,21 @@ export default function CreateInvoicePage() {
                         </span>
                       )}
                     </td>
-                    <td className="td">₹{it.price.toFixed(2)}</td>
+                    <td className="td">
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span style={{ 
+                          color: it.has_custom_price ? 'var(--danger)' : 'inherit',
+                          fontWeight: it.has_custom_price ? 'bold' : 'normal'
+                        }}>
+                          ₹{it.price.toFixed(2)}
+                        </span>
+                        {it.has_custom_price && (
+                          <span style={{ color: 'var(--danger)', fontSize: '0.75rem' }}>
+                            ⭐
+                          </span>
+                        )}
+                      </div>
+                    </td>
                     <td className="td">{it.quantity}</td>
                     <td className="td">
                       ₹{(it.price * it.quantity).toFixed(2)}
@@ -302,8 +331,20 @@ export default function CreateInvoicePage() {
                     {p.name}
                   </div>
                   <div className="muted">
-                    ₹{Number(p.price).toFixed(2)} • {t("stock")}: {p.stock} •{" "}
-                    {t("remaining")}: {p.realTimeRemaining}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                      <span style={{ 
+                        color: customPrices[p.id] !== undefined ? 'var(--danger)' : 'inherit',
+                        fontWeight: customPrices[p.id] !== undefined ? 'bold' : 'normal'
+                      }}>
+                        ₹{Number(p.price).toFixed(2)}
+                      </span>
+                      {customPrices[p.id] !== undefined && (
+                        <span style={{ color: 'var(--danger)', fontSize: '0.75rem' }}>
+                          ⭐
+                        </span>
+                      )}
+                    </div>
+                    {t("stock")}: {p.stock} • {t("remaining")}: {p.realTimeRemaining}
                     {p.stockStatus === "out-of-stock" && (
                       <span
                         style={{ color: "var(--danger)", marginLeft: "0.5rem" }}
@@ -331,27 +372,81 @@ export default function CreateInvoicePage() {
                   </div>
                 </div>
               </div>
-              <input
-                type="number"
-                min="0"
-                className="input input-product input--sm input--w-24"
-                value={quantities[p.id] || ""}
-                onChange={(e) => {
-                  const newQty = Number(e.target.value) || 0;
-                  setQuantities((q) => ({ ...q, [p.id]: e.target.value }));
-                }}
-                style={{
-                  // Disable increment/decrement buttons
-                  WebkitAppearance: "none",
-                  MozAppearance: "textfield",
-                  opacity: 1, // Always enabled since we allow negative stock
-                }}
-                title={
-                  p.stockStatus === "out-of-stock"
-                    ? "Product is out of stock but can still be added to invoice"
-                    : ""
-                }
-              />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                {/* Custom Price Input */}
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  className="input input--sm"
+                  style={{ 
+                    maxWidth: '6rem',
+                    color: customPrices[p.id] !== undefined ? 'var(--danger)' : 'inherit',
+                    fontWeight: customPrices[p.id] !== undefined ? 'bold' : 'normal'
+                  }}
+                  placeholder={Number(p.price).toFixed(2)}
+                  value={customPrices[p.id] !== undefined ? String(customPrices[p.id]) : ""}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value === "") {
+                      // Remove custom price
+                      setCustomPrices(prev => {
+                        const newPrices = { ...prev };
+                        delete newPrices[p.id];
+                        return newPrices;
+                      });
+                    } else {
+                      // Set custom price
+                      setCustomPrices(prev => ({ ...prev, [p.id]: value }));
+                    }
+                  }}
+                  title="Set custom price (leave empty for default)"
+                />
+                {/* Reset Button */}
+                {customPrices[p.id] !== undefined && (
+                  <button
+                    type="button"
+                    className="button button--sm"
+                    style={{ 
+                      padding: '0.25rem 0.5rem',
+                      fontSize: '0.75rem',
+                      minWidth: 'auto'
+                    }}
+                    onClick={() => {
+                      setCustomPrices(prev => {
+                        const newPrices = { ...prev };
+                        delete newPrices[p.id];
+                        return newPrices;
+                      });
+                    }}
+                    title="Reset to default price"
+                  >
+                    🔄
+                  </button>
+                )}
+                {/* Quantity Input */}
+                <input
+                  type="number"
+                  min="0"
+                  className="input input-product input--sm input--w-24"
+                  value={quantities[p.id] || ""}
+                  onChange={(e) => {
+                    const newQty = Number(e.target.value) || 0;
+                    setQuantities((q) => ({ ...q, [p.id]: e.target.value }));
+                  }}
+                  style={{
+                    // Disable increment/decrement buttons
+                    WebkitAppearance: "none",
+                    MozAppearance: "textfield",
+                    opacity: 1, // Always enabled since we allow negative stock
+                  }}
+                  title={
+                    p.stockStatus === "out-of-stock"
+                      ? "Product is out of stock but can still be added to invoice"
+                      : ""
+                  }
+                />
+              </div>
             </div>
           ))}
         </div>

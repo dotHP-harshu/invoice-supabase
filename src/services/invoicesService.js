@@ -7,7 +7,8 @@ import {
   addInvoiceItemToCache, 
   updateInvoiceInCache, 
   deleteInvoiceFromCache, 
-  deleteInvoiceItemsFromCache 
+  deleteInvoiceItemsFromCache,
+  putInvoiceItemToCache
 } from '../offline/cache.js'
 import { enqueueSync } from '../offline/idb.js'
 import { jsPDF } from 'jspdf'
@@ -52,12 +53,17 @@ export async function getInvoiceWithItems(invoiceId) {
         const { data: cachedProducts } = await syncDownProducts()
         const normalized = cachedInvoiceItems.map((it) => {
           const product = cachedProducts?.find(p => p.id === it.product_id)
+          const productPrice = Number(product?.price ?? 0)
+          const customPrice = it.custom_price
+          const finalPrice = customPrice ?? productPrice
           return {
             id: it.id,
             product_id: it.product_id,
             quantity: it.quantity,
             product_name: product?.name || 'Unknown Product',
-            price: product?.price || 0,
+            price: Number(finalPrice),
+            original_price: productPrice,
+            has_custom_price: customPrice !== null && customPrice !== undefined,
           }
         })
         return { data: { ...cachedInvoice, items: normalized } }
@@ -71,17 +77,24 @@ export async function getInvoiceWithItems(invoiceId) {
     
     const { data: items, error: itemsErr } = await supabase
       .from('invoice_items')
-      .select('id, product_id, quantity, products(name, price)')
+      .select('id, product_id, quantity, custom_price, products(name, price)')
       .eq('invoice_id', invoiceId)
     if (itemsErr) return { error: itemsErr }
     
-    const normalized = items.map((it) => ({
-      id: it.id,
-      product_id: it.product_id,
-      quantity: it.quantity,
-      product_name: it.products.name,
-      price: it.products.price,
-    }))
+    const normalized = items.map((it) => {
+      const productPrice = Number(it.products.price)
+      const customPrice = it.custom_price
+      const finalPrice = customPrice ?? productPrice
+      return {
+        id: it.id,
+        product_id: it.product_id,
+        quantity: it.quantity,
+        product_name: it.products.name,
+        price: Number(finalPrice),
+        original_price: productPrice,
+        has_custom_price: customPrice !== null && customPrice !== undefined,
+      }
+    })
     
     return { data: { ...invoice, items: normalized } }
   } catch {
@@ -90,12 +103,9 @@ export async function getInvoiceWithItems(invoiceId) {
 }
 
 export async function createInvoice(customerName, items) {
-  console.log('createInvoice called with:', { customerName, items })
-  console.log('Navigator online status:', navigator.onLine)
-  console.log('Supabase client:', supabase)
+  
   
   if (!navigator.onLine) {
-    console.log('Offline mode - creating in cache')
     // Create in local cache immediately
     const tempId = Date.now()
     const offlineInvoice = { 
@@ -114,8 +124,8 @@ export async function createInvoice(customerName, items) {
         invoice_id: tempId,
         product_id: item.product_id,
         quantity: item.quantity,
+        custom_price: item.custom_price ?? null,
         _offline: true
-        // Note: price field removed as it doesn't exist in the database schema
       }
       await addInvoiceItemToCache(offlineItem)
     }
@@ -125,22 +135,17 @@ export async function createInvoice(customerName, items) {
       customerName,
       items: items.map(item => ({
         product_id: item.product_id,
-        quantity: item.quantity
-        // Note: price field removed as it doesn't exist in the database schema
+        quantity: item.quantity,
+        custom_price: item.custom_price ?? null
       }))
     }
     
     await enqueueSync({ kind: 'invoice:create', payload: syncPayload })
-    console.log('Offline invoice queued for sync:', syncPayload)
     return { data: { id: tempId } }
   }
   
   try {
-    console.log('Starting invoice creation process...')
     
-    // 1. Validate stock before creating invoice (now returns warnings instead of errors)
-    console.log('Validating stock for items:', items)
-    console.log('Items data structure:', JSON.stringify(items, null, 2))
     
     const { valid, errors, warnings, error: validationError } = await validateStockForInvoice(items)
     if (validationError) {
@@ -159,57 +164,48 @@ export async function createInvoice(customerName, items) {
     try {
       const { data: invoiceData, error: invErr } = await supabase.from('invoices').insert({ customer_name: customerName }).select('id').single()
       if (invErr) {
-        console.error('Invoice insertion error:', invErr)
         return { error: invErr }
       }
       inv = invoiceData
       invoiceId = inv.id
-      console.log('Invoice created successfully:', inv)
     } catch (dbError) {
-      console.error('Database error during invoice insertion:', dbError)
       return { error: { message: `Database error: ${dbError.message || dbError}` } }
     }
     
     // 3. Insert items
-    console.log('Inserting invoice items:', items)
     let itemsRows
     try {
-      itemsRows = items.map(i => ({ invoice_id: invoiceId, product_id: i.product_id, quantity: i.quantity }))
-      console.log('Items rows to insert:', itemsRows)
+      itemsRows = items.map(i => ({ 
+        invoice_id: invoiceId, 
+        product_id: i.product_id, 
+        quantity: i.quantity,
+        custom_price: i.custom_price ?? null
+      }))
       const { error: itemsErr } = await supabase.from('invoice_items').insert(itemsRows)
       if (itemsErr) {
-        console.error('Items insertion error:', itemsErr)
         return { error: itemsErr }
       }
-      console.log('Invoice items inserted successfully')
     } catch (dbError) {
-      console.error('Database error during items insertion:', dbError)
       return { error: { message: `Database error during items insertion: ${dbError.message || dbError}` } }
     }
     
     // 4. Update stock tracking
-    console.log('Updating stock tracking...')
     await updateStockForInvoice([], items)
     
     // 5. Update local cache
-    console.log('Updating local cache...')
     try {
       await addInvoiceToCache({ ...inv, customer_name: customerName })
       for (const itemRow of itemsRows) {
         await addInvoiceItemToCache(itemRow)
       }
-      console.log('Local cache updated successfully')
     } catch (cacheError) {
-      console.warn('Cache update failed, but invoice was created successfully:', cacheError)
       // Don't fail the entire operation if cache fails
       // The invoice is already created in the database
     }
     
     // Return warnings if any (for user notification)
-    console.log('Invoice creation completed successfully')
     return { data: { id: invoiceId }, warnings }
   } catch (error) {
-    console.error('Error creating invoice:', error)
     return { error: { message: `Failed to create invoice: ${error.message || error}` } }
   }
 }
@@ -220,7 +216,26 @@ export async function updateInvoice(invoiceId, updates) {
   if (!navigator.onLine) {
     console.log('Offline mode - updating cache and queuing for sync')
     // Update local cache immediately
-    await updateInvoiceInCache(invoiceId, updates)
+    try {
+      if (updates.customer_name !== undefined) {
+        await updateInvoiceInCache(invoiceId, { customer_name: updates.customer_name })
+      }
+      if (Array.isArray(updates.items)) {
+        // Replace local invoice items for immediate UI consistency
+        await deleteInvoiceItemsFromCache(invoiceId)
+        const rows = updates.items.map(i => ({ 
+          invoice_id: invoiceId,
+          product_id: i.product_id,
+          quantity: i.quantity,
+          custom_price: i.custom_price ?? null
+        }))
+        for (const row of rows) {
+          await addInvoiceItemToCache(row)
+        }
+      }
+    } catch (cacheError) {
+      console.warn('Offline cache update failed (will still queue sync):', cacheError)
+    }
     
     // Queue for sync when online
     await enqueueSync({ kind: 'invoice:update', payload: { invoiceId, updates } })
@@ -289,7 +304,8 @@ export async function updateInvoice(invoiceId, updates) {
           const rows = updates.items.map(i => ({ 
             invoice_id: invoiceId, 
             product_id: i.product_id, 
-            quantity: i.quantity
+            quantity: i.quantity,
+            custom_price: i.custom_price ?? null
           }))
           
           console.log('Inserting new items:', rows)
@@ -356,6 +372,65 @@ export async function updateInvoice(invoiceId, updates) {
   }
 }
 
+export async function updateInvoiceItemPrice(invoiceId, itemId, customPrice) {
+  console.log('updateInvoiceItemPrice called with:', { invoiceId, itemId, customPrice, isOnline: navigator.onLine })
+  
+  if (!navigator.onLine) {
+    console.log('Offline mode - updating cache and queuing for sync')
+    // Update local cache immediately
+    try {
+      // Store custom price in local cache
+      const { data: cachedItems } = await syncDownInvoiceItems()
+      const item = cachedItems?.find(i => i.id === itemId && i.invoice_id === invoiceId)
+      if (item) {
+        const updatedItem = { ...item, custom_price: customPrice }
+        await putInvoiceItemToCache(updatedItem)
+      }
+    } catch (cacheError) {
+      console.warn('Offline cache update failed (will still queue sync):', cacheError)
+    }
+    
+    // Queue for sync when online
+    await enqueueSync({ kind: 'invoice_item:update_price', payload: { invoiceId, itemId, customPrice } })
+    return { data: true }
+  }
+  
+  try {
+    console.log('Online mode - updating database directly')
+    
+    // Update the custom_price field in invoice_items table
+    const { error } = await supabase
+      .from('invoice_items')
+      .update({ custom_price: customPrice })
+      .eq('id', itemId)
+      .eq('invoice_id', invoiceId)
+    
+    if (error) {
+      console.error('Error updating custom price:', error)
+      return { error }
+    }
+    
+    console.log('Custom price updated successfully')
+    
+    // Update local cache
+    try {
+      const { data: cachedItems } = await syncDownInvoiceItems()
+      const item = cachedItems?.find(i => i.id === itemId && i.invoice_id === invoiceId)
+      if (item) {
+        const updatedItem = { ...item, custom_price: customPrice }
+        await putInvoiceItemToCache(updatedItem)
+      }
+    } catch (cacheError) {
+      console.warn('Cache update failed, but database was updated:', cacheError)
+    }
+    
+    return { data: true }
+  } catch (error) {
+    console.error('Unexpected error updating custom price:', error)
+    return { error: { message: `Failed to update custom price: ${error.message || error}` } }
+  }
+}
+
 export async function deleteInvoice(invoiceId) {
   if (!navigator.onLine) {
     // Remove from local cache immediately
@@ -414,13 +489,7 @@ export function exportInvoiceToPDF(invoice) {
     putOnlyUsedFonts: true
   })
   
-  // Add Hindi font support with fallback
-  try {
-    doc.addFont('https://fonts.gstatic.com/s/notosansdevanagari/v18/ieVc2YdFI3GCY6SyQy1KfStzYKZgzN1z0w.woff2', 'NotoSansDevanagari', 'normal')
-  } catch (error) {
-    console.warn('Hindi font could not be loaded, using default font:', error)
-    // Continue without Hindi font - will use default font
-  }
+  // Removed external font load to avoid network errors; using default font
   
   const pageMargin = 40
   const contentWidth = 595.28 - pageMargin * 2
